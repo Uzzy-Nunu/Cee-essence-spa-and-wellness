@@ -1,44 +1,56 @@
 "use client";
+
 import { useEffect, useMemo, useState } from "react";
 import { duration, naira, timeLabel } from "@/lib/format";
 import type { Service, Therapist } from "@/lib/types";
 
 type Props = { services: Service[]; therapists: Therapist[] };
 
-// Maps each category label to the service names that belong to it.
-// Names must match exactly what is seeded in the database.
-const CATEGORY_SERVICE_NAMES: Record<string, string[]> = {
+// Full catalog with exact names, durations, and prices
+export const TREATMENT_CATALOG: Record<
+  string,
+  { name: string; duration_minutes: number; price: number; description?: string }[]
+> = {
   "Massage Treatments": [
-    "Signature Cee Essence Massage",
-    "Swedish Massage",
-    "Deep Tissue Massage",
-    "Hot Stone Massage",
-    "Aromatherapy Massage",
-    "Couple's Massage",
-    "Prenatal Massage",
+    { name: "Signature Cee Essence Massage", duration_minutes: 75, price: 55000 },
+    { name: "Swedish Massage", duration_minutes: 60, price: 35000 },
+    { name: "Deep Tissue Massage", duration_minutes: 60, price: 40000 },
+    { name: "Hot Stone Massage", duration_minutes: 75, price: 45000 },
+    { name: "Aromatherapy Massage", duration_minutes: 60, price: 38000 },
+    { name: "Couple's Massage", duration_minutes: 60, price: 75000 },
+    { name: "Prenatal Massage", duration_minutes: 60, price: 38000 },
   ],
   "Facial Treatments": [
-    "Signature Facial",
-    "Hydrating Facial",
-    "Brightening Facial",
-    "Anti-Aging Facial",
-    "Deep Cleansing Facial",
+    { name: "Signature Facial", duration_minutes: 60, price: 35000 },
+    { name: "Hydrating Facial", duration_minutes: 45, price: 28000 },
+    { name: "Brightening Facial", duration_minutes: 60, price: 40000 },
+    { name: "Anti-Aging Facial", duration_minutes: 60, price: 45000 },
+    { name: "Deep Cleansing Facial", duration_minutes: 45, price: 30000 },
   ],
   "Body Treatments": [
-    "Body Scrub & Polish",
-    "Detox Body Wrap",
-    "Half-Day Pamper Package",
+    { name: "Body Scrub & Polish", duration_minutes: 45, price: 30000 },
+    { name: "Detox Body Wrap", duration_minutes: 60, price: 40000 },
+    { name: "Half-Day Pamper Package", duration_minutes: 180, price: 90000 },
   ],
   "Hand & Foot Treatments": [
-    "Signature Pedicure",
-    "Signature Manicure",
-    "Foot Reflexology",
+    { name: "Signature Pedicure", duration_minutes: 60, price: 20000 },
+    { name: "Signature Manicure", duration_minutes: 45, price: 16000 },
+    { name: "Foot Reflexology", duration_minutes: 45, price: 22000 },
   ],
 };
 
-const CATEGORIES = Object.keys(CATEGORY_SERVICE_NAMES);
+const CATEGORIES = Object.keys(TREATMENT_CATALOG);
 
-export function Booking({ services, therapists }: Props) {
+function normalizeName(str: string): string {
+  return str
+    .toLowerCase()
+    .replace(/['’]/g, "'")
+    .replace(/&/g, "and")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function Booking({ services = [], therapists = [] }: Props) {
   const [category, setCategory] = useState("");
   const [serviceId, setService] = useState("");
   const [therapistId, setTherapist] = useState("");
@@ -51,27 +63,55 @@ export function Booking({ services, therapists }: Props) {
   const [error, setError] = useState("");
   const [confirmationMessage, setConfirmationMessage] = useState("");
 
-  // Services that belong to the currently selected category
+  // Build the list of services for the active category.
+  // Matches against DB services if loaded, or falls back to catalog definitions.
   const categoryServices = useMemo(() => {
-    if (!category) return [];
-    const names = CATEGORY_SERVICE_NAMES[category] ?? [];
-    // Preserve the defined order for each category
-    return names
-      .map((name) => services.find((s) => s.name === name && s.is_active))
-      .filter((s): s is Service => Boolean(s));
+    if (!category || !TREATMENT_CATALOG[category]) return [];
+    const catalogItems = TREATMENT_CATALOG[category];
+
+    return catalogItems.map((item) => {
+      // Find matching service from the database (case & quote insensitive)
+      const matchedDbService = services.find((s) => {
+        if (!s || !s.name) return false;
+        return normalizeName(s.name) === normalizeName(item.name);
+      });
+
+      if (matchedDbService) {
+        return matchedDbService;
+      }
+
+      // Fallback service object if not yet seeded in DB
+      return {
+        id: item.name,
+        name: item.name,
+        description: item.description ?? null,
+        duration_minutes: item.duration_minutes,
+        price: item.price,
+        is_active: true,
+      } as Service;
+    });
   }, [category, services]);
 
-  const service = services.find((s) => s.id === serviceId);
+  const service = useMemo(() => {
+    return (
+      services.find((s) => s.id === serviceId) ||
+      categoryServices.find((s) => s.id === serviceId)
+    );
+  }, [services, categoryServices, serviceId]);
 
   const qualified = useMemo(
     () =>
       therapists.filter((t) =>
-        t.therapist_services?.some((m) => m.service_id === serviceId),
+        t.therapist_services?.some(
+          (m) =>
+            m.service_id === serviceId ||
+            (service && m.services?.name && normalizeName(m.services.name) === normalizeName(service.name)),
+        ),
       ),
-    [therapists, serviceId],
+    [therapists, serviceId, service],
   );
 
-  // Reset treatment selection when category changes
+  // Reset treatment and downstream state whenever category changes
   useEffect(() => {
     setService("");
     setTherapist("");
@@ -79,31 +119,34 @@ export function Booking({ services, therapists }: Props) {
     setSlots([]);
   }, [category]);
 
-  // Reset therapist + time when service changes
+  // Reset therapist & time slot whenever selected treatment changes
   useEffect(() => {
     setTherapist("");
     setTime("");
   }, [serviceId]);
 
-  // Fetch available time slots whenever date, service, or therapist preference changes
+  // Fetch available slots from backend
   useEffect(() => {
     if (!date || !serviceId) {
       setSlots([]);
       setLoadingSlots(false);
       return;
     }
+
     const controller = new AbortController();
     setLoadingSlots(true);
     setTime("");
     setError("");
+
     fetch(
       `/api/availability?serviceId=${encodeURIComponent(serviceId)}&date=${encodeURIComponent(date)}&therapistId=${encodeURIComponent(therapistId)}`,
       { signal: controller.signal },
     )
       .then(async (response) => {
         const data = await response.json();
-        if (!response.ok)
+        if (!response.ok) {
           throw new Error(data.error || "Unable to load availability.");
+        }
         return data;
       })
       .then((data) => setSlots(Array.isArray(data.slots) ? data.slots : []))
@@ -125,18 +168,20 @@ export function Booking({ services, therapists }: Props) {
       .finally(() => {
         if (!controller.signal.aborted) setLoadingSlots(false);
       });
+
     return () => controller.abort();
   }, [date, serviceId, therapistId]);
 
   async function submit(form: FormData) {
     setLoading(true);
     setError("");
+
     try {
       const response = await fetch("/api/appointments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          service_id: serviceId,
+          service_id: service?.id || serviceId,
           therapist_id: therapistId || null,
           appointment_date: date,
           start_time: time,
@@ -146,11 +191,14 @@ export function Booking({ services, therapists }: Props) {
           notes: form.get("notes"),
         }),
       });
+
       const data = await response.json();
-      if (!response.ok)
+      if (!response.ok) {
         throw new Error(
           data.error || "We could not reserve that time. Please try another slot.",
         );
+      }
+
       setConfirmationMessage(
         data.emailMessage || "Your booking request has been saved.",
       );
@@ -166,7 +214,7 @@ export function Booking({ services, therapists }: Props) {
     }
   }
 
-  if (submitted)
+  if (submitted) {
     return (
       <div className="confirmation">
         <span className="leaf">❦</span>
@@ -185,20 +233,19 @@ export function Booking({ services, therapists }: Props) {
         </button>
       </div>
     );
+  }
 
   return (
     <form action={submit} className="booking-form">
-      {/* ── Step 01: Treatment Category ── */}
-      <div className="field wide">
+      {/* ── 01 · Treatment Category (Always visible) ── */}
+      <div className={category ? "field" : "field wide"}>
         <label>01 · Treatment category</label>
         <select
           required
           value={category}
           onChange={(e) => setCategory(e.target.value)}
         >
-          <option value="" disabled>
-            Select a category…
-          </option>
+          <option value="">Select a category…</option>
           {CATEGORIES.map((cat) => (
             <option value={cat} key={cat}>
               {cat}
@@ -207,28 +254,26 @@ export function Booking({ services, therapists }: Props) {
         </select>
       </div>
 
-      {/* ── Step 02: Treatment Type (shown only after a category is picked) ── */}
+      {/* ── 02 · Select Treatment Type (Appears beside category once chosen) ── */}
       {category && (
-        <div className="field wide">
-          <label>02 · Select treatment type</label>
+        <div className="field">
+          <label>02 · Select Treatment Type</label>
           <select
             required
             value={serviceId}
             onChange={(e) => setService(e.target.value)}
           >
-            <option value="" disabled>
-              Select a treatment…
-            </option>
+            <option value="">Select a treatment…</option>
             {categoryServices.map((s) => (
               <option value={s.id} key={s.id}>
-                {s.name} — {naira(s.price)} · {duration(s.duration_minutes)}
+                {s.name} — {duration(s.duration_minutes)} · {naira(s.price)}
               </option>
             ))}
           </select>
         </div>
       )}
 
-      {/* ── Step 03: Preferred therapist ── */}
+      {/* ── 03 · Preferred Therapist ── */}
       <div className="field">
         <label>03 · Preferred therapist</label>
         <select
@@ -245,7 +290,7 @@ export function Booking({ services, therapists }: Props) {
         </select>
       </div>
 
-      {/* ── Step 04: Date ── */}
+      {/* ── 04 · Select Date ── */}
       <div className="field">
         <label>04 · Select a date</label>
         <input
@@ -261,7 +306,7 @@ export function Booking({ services, therapists }: Props) {
         />
       </div>
 
-      {/* ── Step 05: Available times ── */}
+      {/* ── 05 · Available Times ── */}
       <div className="field wide">
         <label>05 · Available times</label>
         <div className="slots">
@@ -290,24 +335,14 @@ export function Booking({ services, therapists }: Props) {
         </div>
       </div>
 
-      {/* ── Contact fields ── */}
+      {/* ── 06 · Client Details ── */}
       <div className="field">
         <label>06 · Your name</label>
-        <input
-          name="name"
-          required
-          maxLength={120}
-          placeholder="Full name"
-        />
+        <input name="name" required maxLength={120} placeholder="Full name" />
       </div>
       <div className="field">
         <label>Phone number</label>
-        <input
-          name="phone"
-          required
-          maxLength={40}
-          placeholder="+234"
-        />
+        <input name="phone" required maxLength={40} placeholder="+234" />
       </div>
       <div className="field">
         <label>Email address</label>
