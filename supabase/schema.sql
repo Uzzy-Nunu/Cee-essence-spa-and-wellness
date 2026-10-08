@@ -12,6 +12,7 @@
 create table services (
   id uuid primary key default gen_random_uuid(),
   name text not null,
+  category text not null default 'Massage Treatments',
   description text,
   duration_minutes integer not null check (duration_minutes > 0),
   price numeric(10,2),
@@ -65,26 +66,26 @@ create table admin_users (
   created_at timestamp with time zone default now()
 );
 
-insert into services (name, description, duration_minutes, price)
+insert into services (name, category, description, duration_minutes, price)
 values
-  ('Signature Cee Essence Massage', 'A full-body massage blending Swedish and deep tissue techniques, finished with a warm aromatherapy oil application.', 75, 55000),
-  ('Swedish Massage', 'Classic relaxation massage using long, flowing strokes to ease tension and improve circulation.', 60, 35000),
-  ('Deep Tissue Massage', 'Firmer pressure targeting chronic muscle tension and knots.', 60, 40000),
-  ('Hot Stone Massage', 'Heated basalt stones combined with massage to release deep tension and promote circulation.', 75, 45000),
-  ('Aromatherapy Massage', 'A gentler massage using a curated essential oil blend chosen to the client''s mood.', 60, 38000),
-  ('Couple''s Massage', 'A shared relaxation massage experience for two.', 60, 75000),
-  ('Prenatal Massage', 'Positioned for comfort and safety in later pregnancy.', 60, 38000),
-  ('Signature Facial', 'A tailored cleansing, exfoliating, and hydrating facial suited to the client''s skin type.', 60, 35000),
-  ('Hydrating Facial', 'Deep hydration for dry or dehydrated skin, finished with a nourishing mask.', 45, 28000),
-  ('Brightening Facial', 'Vitamin C-forward treatment targeting dullness, dark spots, and uneven tone.', 60, 40000),
-  ('Anti-Aging Facial', 'Collagen-supporting treatment focused on fine lines and firmness.', 60, 45000),
-  ('Deep Cleansing Facial', 'Thorough pore cleansing and extraction for congested or acne-prone skin.', 45, 30000),
-  ('Body Scrub & Polish', 'Full-body exfoliation leaving skin smooth and refreshed.', 45, 30000),
-  ('Detox Body Wrap', 'A mineral-rich wrap designed to draw out toxins and leave skin renewed.', 60, 40000),
-  ('Half-Day Pamper Package', 'Massage, facial, and body scrub combined -- our most popular package booking.', 180, 90000),
-  ('Signature Pedicure', 'Foot soak, shaping, scrub, massage, and polish.', 60, 20000),
-  ('Signature Manicure', 'Hand soak, shaping, cuticle care, massage, and polish.', 45, 16000),
-  ('Foot Reflexology', 'Pressure-point foot therapy distinct from a standard foot massage, promoting whole-body relaxation.', 45, 22000);
+  ('Signature Cee Essence Massage', 'Massage Treatments', 'A full-body massage blending Swedish and deep tissue techniques, finished with a warm aromatherapy oil application.', 75, 55000),
+  ('Swedish Massage', 'Massage Treatments', 'Classic relaxation massage using long, flowing strokes to ease tension and improve circulation.', 60, 35000),
+  ('Deep Tissue Massage', 'Massage Treatments', 'Firmer pressure targeting chronic muscle tension and knots.', 60, 40000),
+  ('Hot Stone Massage', 'Massage Treatments', 'Heated basalt stones combined with massage to release deep tension and promote circulation.', 75, 45000),
+  ('Aromatherapy Massage', 'Massage Treatments', 'A gentler massage using a curated essential oil blend chosen to the client''s mood.', 60, 38000),
+  ('Couple''s Massage', 'Massage Treatments', 'A shared relaxation massage experience for two.', 60, 75000),
+  ('Prenatal Massage', 'Massage Treatments', 'Positioned for comfort and safety in later pregnancy.', 60, 38000),
+  ('Signature Facial', 'Facial Treatments', 'A tailored cleansing, exfoliating, and hydrating facial suited to the client''s skin type.', 60, 35000),
+  ('Hydrating Facial', 'Facial Treatments', 'Deep hydration for dry or dehydrated skin, finished with a nourishing mask.', 45, 28000),
+  ('Brightening Facial', 'Facial Treatments', 'Vitamin C-forward treatment targeting dullness, dark spots, and uneven tone.', 60, 40000),
+  ('Anti-Aging Facial', 'Facial Treatments', 'Collagen-supporting treatment focused on fine lines and firmness.', 60, 45000),
+  ('Deep Cleansing Facial', 'Facial Treatments', 'Thorough pore cleansing and extraction for congested or acne-prone skin.', 45, 30000),
+  ('Body Scrub & Polish', 'Body Treatments', 'Full-body exfoliation leaving skin smooth and refreshed.', 45, 30000),
+  ('Detox Body Wrap', 'Body Treatments', 'A mineral-rich wrap designed to draw out toxins and leave skin renewed.', 60, 40000),
+  ('Half-Day Pamper Package', 'Body Treatments', 'Massage, facial, and body scrub combined -- our most popular package booking.', 180, 90000),
+  ('Signature Pedicure', 'Hand & Foot Treatments', 'Foot soak, shaping, scrub, massage, and polish.', 60, 20000),
+  ('Signature Manicure', 'Hand & Foot Treatments', 'Hand soak, shaping, cuticle care, massage, and polish.', 45, 16000),
+  ('Foot Reflexology', 'Hand & Foot Treatments', 'Pressure-point foot therapy distinct from a standard foot massage, promoting whole-body relaxation.', 45, 22000);
 
 insert into business_hours (weekday, is_open, start_time, end_time)
 values

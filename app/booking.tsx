@@ -2,12 +2,17 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { duration, naira, timeLabel } from "@/lib/format";
-import type { Service, Therapist } from "@/lib/types";
+import type { BlockedDate, BusinessHour, Service, Therapist } from "@/lib/types";
 
-type Props = { services: Service[]; therapists: Therapist[] };
+type Props = {
+  services: Service[];
+  therapists: Therapist[];
+  businessHours?: BusinessHour[];
+  blockedDates?: BlockedDate[];
+};
 
-// Full catalog with exact names, durations, and prices
-export const TREATMENT_CATALOG: Record<
+// Fallback treatment catalog if database has not been seeded
+export const FALLBACK_CATALOG: Record<
   string,
   { name: string; duration_minutes: number; price: number; description?: string }[]
 > = {
@@ -39,9 +44,16 @@ export const TREATMENT_CATALOG: Record<
   ],
 };
 
-const CATEGORIES = Object.keys(TREATMENT_CATALOG);
+const DEFAULT_CATEGORIES = [
+  "Massage Treatments",
+  "Facial Treatments",
+  "Body Treatments",
+  "Hand & Foot Treatments",
+];
 
-function normalizeName(str: string): string {
+const weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function normalize(str: string): string {
   return str
     .toLowerCase()
     .replace(/['’]/g, "'")
@@ -50,11 +62,17 @@ function normalizeName(str: string): string {
     .trim();
 }
 
-export function Booking({ services = [], therapists = [] }: Props) {
+export function Booking({
+  services = [],
+  therapists = [],
+  businessHours = [],
+  blockedDates = [],
+}: Props) {
   const [category, setCategory] = useState("");
   const [serviceId, setService] = useState("");
   const [therapistId, setTherapist] = useState("");
   const [date, setDate] = useState("");
+  const [dateWarning, setDateWarning] = useState("");
   const [time, setTime] = useState("");
   const [slots, setSlots] = useState<string[]>([]);
   const [submitted, setSubmitted] = useState(false);
@@ -63,27 +81,43 @@ export function Booking({ services = [], therapists = [] }: Props) {
   const [error, setError] = useState("");
   const [confirmationMessage, setConfirmationMessage] = useState("");
 
-  // Build the list of services for the active category.
-  // Matches against DB services if loaded, or falls back to catalog definitions.
+  // 1. Dynamic Categories derived from DB services (preserving standard order)
+  const categories = useMemo(() => {
+    const dbCategories = Array.from(
+      new Set(
+        services
+          .map((s) => s.category?.trim())
+          .filter((c): c is string => Boolean(c && c.length > 0)),
+      ),
+    );
+
+    if (dbCategories.length === 0) return DEFAULT_CATEGORIES;
+
+    // Put standard categories in expected order, followed by any new custom categories
+    const ordered = DEFAULT_CATEGORIES.filter((c) => dbCategories.includes(c));
+    const extra = dbCategories.filter((c) => !DEFAULT_CATEGORIES.includes(c));
+    return [...ordered, ...extra];
+  }, [services]);
+
+  // 2. Services for the active Category (dynamic from DB, with catalog fallback)
   const categoryServices = useMemo(() => {
-    if (!category || !TREATMENT_CATALOG[category]) return [];
-    const catalogItems = TREATMENT_CATALOG[category];
+    if (!category) return [];
 
-    return catalogItems.map((item) => {
-      // Find matching service from the database (case & quote insensitive)
-      const matchedDbService = services.find((s) => {
-        if (!s || !s.name) return false;
-        return normalizeName(s.name) === normalizeName(item.name);
-      });
+    const fromDb = services.filter(
+      (s) => s.is_active && (s.category === category || normalize(s.category || "") === normalize(category)),
+    );
 
-      if (matchedDbService) {
-        return matchedDbService;
-      }
+    if (fromDb.length > 0) return fromDb;
 
-      // Fallback service object if not yet seeded in DB
+    // Fallback if category exists in fallback catalog
+    const fallbackList = FALLBACK_CATALOG[category] ?? [];
+    return fallbackList.map((item) => {
+      const match = services.find((s) => normalize(s.name) === normalize(item.name));
+      if (match) return match;
       return {
         id: item.name,
         name: item.name,
+        category,
         description: item.description ?? null,
         duration_minutes: item.duration_minutes,
         price: item.price,
@@ -105,13 +139,42 @@ export function Booking({ services = [], therapists = [] }: Props) {
         t.therapist_services?.some(
           (m) =>
             m.service_id === serviceId ||
-            (service && m.services?.name && normalizeName(m.services.name) === normalizeName(service.name)),
+            (service && m.services?.name && normalize(m.services.name) === normalize(service.name)),
         ),
       ),
     [therapists, serviceId, service],
   );
 
-  // Reset treatment and downstream state whenever category changes
+  // Check business hours & blocked dates on date change
+  useEffect(() => {
+    if (!date) {
+      setDateWarning("");
+      return;
+    }
+
+    // Check blocked dates
+    const blocked = blockedDates.find((b) => b.blocked_date === date);
+    if (blocked) {
+      setDateWarning(`The spa is closed on this date (${blocked.reason || "Public Holiday / Maintenance"}).`);
+      setSlots([]);
+      return;
+    }
+
+    // Check business hours
+    if (businessHours.length > 0) {
+      const selectedDay = new Date(`${date}T12:00:00Z`).getUTCDay();
+      const hourRecord = businessHours.find((h) => h.weekday === selectedDay);
+      if (hourRecord && !hourRecord.is_open) {
+        setDateWarning(`The spa is closed on ${weekdayNames[selectedDay]}s. Please select an open day.`);
+        setSlots([]);
+        return;
+      }
+    }
+
+    setDateWarning("");
+  }, [date, businessHours, blockedDates]);
+
+  // Reset treatment selection when category changes
   useEffect(() => {
     setService("");
     setTherapist("");
@@ -119,7 +182,7 @@ export function Booking({ services = [], therapists = [] }: Props) {
     setSlots([]);
   }, [category]);
 
-  // Reset therapist & time slot whenever selected treatment changes
+  // Reset therapist + time when service changes
   useEffect(() => {
     setTherapist("");
     setTime("");
@@ -127,7 +190,7 @@ export function Booking({ services = [], therapists = [] }: Props) {
 
   // Fetch available slots from backend
   useEffect(() => {
-    if (!date || !serviceId) {
+    if (!date || !serviceId || dateWarning) {
       setSlots([]);
       setLoadingSlots(false);
       return;
@@ -170,7 +233,7 @@ export function Booking({ services = [], therapists = [] }: Props) {
       });
 
     return () => controller.abort();
-  }, [date, serviceId, therapistId]);
+  }, [date, serviceId, therapistId, dateWarning]);
 
   async function submit(form: FormData) {
     setLoading(true);
@@ -246,7 +309,7 @@ export function Booking({ services = [], therapists = [] }: Props) {
           onChange={(e) => setCategory(e.target.value)}
         >
           <option value="">Select a category…</option>
-          {CATEGORIES.map((cat) => (
+          {categories.map((cat) => (
             <option value={cat} key={cat}>
               {cat}
             </option>
@@ -254,7 +317,7 @@ export function Booking({ services = [], therapists = [] }: Props) {
         </select>
       </div>
 
-      {/* ── 02 · Select Treatment Type (Appears beside category once chosen) ── */}
+      {/* ── 02 · Select Treatment Type (Beside category once chosen) ── */}
       {category && (
         <div className="field">
           <label>02 · Select Treatment Type</label>
@@ -304,6 +367,11 @@ export function Booking({ services = [], therapists = [] }: Props) {
             setTime("");
           }}
         />
+        {dateWarning && (
+          <p style={{ fontSize: "11px", color: "#9b2819", margin: "4px 0" }}>
+            {dateWarning}
+          </p>
+        )}
       </div>
 
       {/* ── 05 · Available Times ── */}
@@ -314,6 +382,8 @@ export function Booking({ services = [], therapists = [] }: Props) {
             <p>Select a treatment to continue.</p>
           ) : !date ? (
             <p>Select a date to view availability.</p>
+          ) : dateWarning ? (
+            <p>{dateWarning}</p>
           ) : loadingSlots ? (
             <p>Checking open times…</p>
           ) : error ? (
@@ -370,7 +440,7 @@ export function Booking({ services = [], therapists = [] }: Props) {
       )}
 
       <button
-        disabled={!service || !date || !time || loading || loadingSlots}
+        disabled={!service || !date || Boolean(dateWarning) || !time || loading || loadingSlots}
         className="button submit"
       >
         {loading ? "Reserving…" : "Confirm reservation →"}
