@@ -133,17 +133,18 @@ export function Booking({
     );
   }, [services, categoryServices, serviceId]);
 
-  const qualified = useMemo(
-    () =>
-      therapists.filter((t) =>
-        t.therapist_services?.some(
-          (m) =>
-            m.service_id === serviceId ||
-            (service && m.services?.name && normalize(m.services.name) === normalize(service.name)),
-        ),
+  const qualified = useMemo(() => {
+    const matched = therapists.filter((t) =>
+      t.therapist_services?.some(
+        (m) =>
+          m.service_id === serviceId ||
+          (service && m.services?.name && normalize(m.services.name) === normalize(service.name)),
       ),
-    [therapists, serviceId, service],
-  );
+    );
+    // If specific therapists are mapped to this treatment, show them.
+    // If no specific restriction exists, show ALL active therapists from the admin dashboard!
+    return matched.length > 0 ? matched : therapists.filter((t) => t.is_active !== false);
+  }, [therapists, serviceId, service]);
 
   // Check business hours & blocked dates on date change
   useEffect(() => {
