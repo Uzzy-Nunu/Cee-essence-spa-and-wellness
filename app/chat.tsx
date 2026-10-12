@@ -1,9 +1,60 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState, Fragment } from "react";
 
 type Message = { role: "user" | "assistant"; text: string };
-const welcome = "Welcome to Cee Essence. I’m your wellness concierge. How may I assist you today?";
+const welcome = "Welcome to Cee Essence. I’m your wellness concierge.\n\nHow may I assist you today? You can ask about treatments, check availability, book an appointment, or speak with our team.";
+
+function FormattedMessage({ text }: { text: string }) {
+  const lines = text.split("\n");
+  const elements: React.ReactNode[] = [];
+  let currentList: string[] = [];
+
+  function flushList() {
+    if (currentList.length > 0) {
+      elements.push(
+        <ul key={`ul-${elements.length}`}>
+          {currentList.map((item, idx) => (
+            <li key={idx}>{renderInline(item)}</li>
+          ))}
+        </ul>,
+      );
+      currentList = [];
+    }
+  }
+
+  function renderInline(str: string) {
+    // Render bold markdown **text**
+    const parts = str.split(/(\*\*.*?\*\*)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith("**") && part.endsWith("**")) {
+        return <strong key={i}>{part.slice(2, -2)}</strong>;
+      }
+      return <Fragment key={i}>{part}</Fragment>;
+    });
+  }
+
+  lines.forEach((rawLine, i) => {
+    const line = rawLine.trim();
+    if (!line) {
+      flushList();
+      return;
+    }
+
+    // Check for bullet lines (*, -, •, 1.)
+    const bulletMatch = line.match(/^([*\-•]|\d+\.)\s+(.+)$/);
+    if (bulletMatch) {
+      currentList.push(bulletMatch[2]);
+    } else {
+      flushList();
+      elements.push(<p key={`p-${i}`}>{renderInline(line)}</p>);
+    }
+  });
+
+  flushList();
+
+  return <>{elements}</>;
+}
 
 export function Concierge() {
   const [open, setOpen] = useState(false);
@@ -14,6 +65,7 @@ export function Concierge() {
   const [handoff, setHandoff] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("cee-essence-chat-session");
@@ -21,6 +73,12 @@ export function Concierge() {
     window.localStorage.setItem("cee-essence-chat-session", id);
     setSessionId(id);
   }, []);
+
+  useEffect(() => {
+    if (open) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, busy, open]);
 
   async function send(event: FormEvent) {
     event.preventDefault();
@@ -93,12 +151,21 @@ export function Concierge() {
           <button className="text-button" onClick={() => { setHandoff(false); setError(""); }}>Return to concierge</button>
         </div> : <>
           <div className="chat-messages" aria-live="polite">
-            {messages.map((message, index) => <p className={message.role} key={index}>{message.text}</p>)}
-            {busy && <p className="assistant">Considering your request…</p>}
+            {messages.map((message, index) => (
+              <div className={`msg-bubble ${message.role}`} key={index}>
+                <FormattedMessage text={message.text} />
+              </div>
+            ))}
+            {busy && (
+              <div className="msg-bubble assistant">
+                <p>Typing…</p>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
           </div>
           {error && <p className="error chat-error" role="alert">{error}</p>}
           <form onSubmit={send} className="chat-input">
-            <input value={text} onChange={(event) => setText(event.target.value)} maxLength={1000} placeholder="Ask about a treatment…" aria-label="Message the concierge" />
+            <input value={text} onChange={(event) => setText(event.target.value)} maxLength={1000} placeholder="Ask about a treatment or book…" aria-label="Message the concierge" />
             <button aria-label="Send message" disabled={busy || !sessionId || !text.trim()}>→</button>
           </form>
           <button className="handoff-link" onClick={() => { setHandoff(true); setError(""); }}>Would you prefer to speak with our team?</button>
