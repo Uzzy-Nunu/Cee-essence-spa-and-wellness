@@ -113,7 +113,7 @@ export default function Admin() {
         name === "Appointments"
           ? "*,services(name,category),therapists(full_name)"
           : name === "Therapists"
-            ? "*,therapist_services(service_id,services(name)),therapist_off_days(id,off_date)"
+            ? "*,therapist_services(service_id,services(name)),therapist_time_off(id,off_date)"
             : "*",
       );
 
@@ -1186,7 +1186,7 @@ function Therapist({
   const mappedServiceIds = new Set<string>(
     (row.therapist_services || []).map((m: Row) => m.service_id),
   );
-  const offDays: Row[] = row.therapist_off_days || [];
+  const offDays: Row[] = row.therapist_time_off || [];
 
   async function toggleService(serviceId: string) {
     if (!isSuperAdmin) return;
@@ -1203,7 +1203,7 @@ function Therapist({
     if (!isSuperAdmin) return;
     if (!offDate) return;
     setOffMsg("");
-    const { error } = await db.from("therapist_off_days").insert({
+    const { error } = await db.from("therapist_time_off").insert({
       therapist_id: row.id,
       off_date: offDate,
     });
@@ -1218,7 +1218,11 @@ function Therapist({
 
   async function removeOffDay(offDayId: string) {
     if (!isSuperAdmin) return;
-    await db.from("therapist_off_days").delete().eq("id", offDayId);
+    const { error } = await db.from("therapist_time_off").delete().eq("id", offDayId);
+    if (error) {
+      setOffMsg(error.message);
+      return;
+    }
     done();
   }
 
