@@ -16,6 +16,8 @@ Next.js 15 booking and operations site backed by Supabase.
 
 5. Run `npm test` and `npm run build` before deploying.
 
+On local Windows development, Next.js writes its build cache under `node_modules/.cache/next` to avoid OneDrive reparse-point errors. Vercel uses the standard `.next` output directory required by its deployment builder.
+
 ## Features
 
 - Public service and therapist pages with live slot availability and appointment requests.

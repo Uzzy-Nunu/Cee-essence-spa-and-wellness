@@ -4,7 +4,7 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseHostname = supabaseUrl ? new URL(supabaseUrl).hostname : null;
 
 const nextConfig: NextConfig = {
-  distDir: "node_modules/.cache/next",
+  distDir: process.env.VERCEL === "1" ? ".next" : "node_modules/.cache/next",
   images: {
     remotePatterns: [
       // Unsplash placeholder images
