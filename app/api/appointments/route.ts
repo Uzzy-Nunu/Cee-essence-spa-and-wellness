@@ -1,11 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { availableSlots, findAvailableTherapistId } from "@/lib/availability";
-import { adminSupabase } from "@/lib/supabase";
+import { adminSupabase } from "@/lib/supabase-admin";
 import { Resend } from "resend";
 import { appointmentEmail, ownerNotificationEmail, emailIsConfigured } from "@/lib/email";
 import { claimNotification, finishNotification } from "@/lib/notifications";
 import { isValidDate, isValidTime } from "@/lib/booking-rules";
 import { enforceRateLimit } from "@/lib/rate-limit";
+import { getPublicSiteUrl } from "@/lib/site-url";
 
 export async function POST(req: NextRequest) {
   try {
@@ -14,7 +16,7 @@ export async function POST(req: NextRequest) {
     }
   } catch (error) {
     console.error("Appointment rate-limit check failed", error);
-    // Do NOT block booking if rate-limit check fails — just proceed
+    return NextResponse.json({ error: "Booking is temporarily unavailable." }, { status: 503 });
   }
 
   let body: Record<string, unknown>;
@@ -25,6 +27,12 @@ export async function POST(req: NextRequest) {
   }
 
   const serviceId = typeof body.service_id === "string" ? body.service_id : "";
+  const rawServiceIds = Array.isArray(body.service_ids) ? (body.service_ids as unknown[]) : [];
+  const serviceIds = rawServiceIds
+    .filter((id): id is string => typeof id === "string" && Boolean(id.trim()))
+    .map((id) => id.trim());
+  const effectiveServiceIds = serviceIds.length > 0 ? serviceIds : (serviceId ? [serviceId] : []);
+  const primaryServiceId = effectiveServiceIds[0] || serviceId;
   const date = typeof body.appointment_date === "string" ? body.appointment_date : "";
   const startTime = typeof body.start_time === "string" ? body.start_time : "";
   const fullName = typeof body.full_name === "string" ? body.full_name.trim() : "";
@@ -34,7 +42,12 @@ export async function POST(req: NextRequest) {
   const notes = typeof body.notes === "string" ? body.notes.trim() : "";
 
   if (
-    !serviceId ||
+    !primaryServiceId ||
+    (rawServiceIds.length > 0 && serviceIds.length !== rawServiceIds.length) ||
+    (serviceId && effectiveServiceIds[0] !== serviceId) ||
+    effectiveServiceIds.length > 6 ||
+    effectiveServiceIds.some((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) ||
+    new Set(effectiveServiceIds).size !== effectiveServiceIds.length ||
     !isValidDate(date) ||
     !isValidTime(startTime) ||
     fullName.length < 2 ||
@@ -50,39 +63,104 @@ export async function POST(req: NextRequest) {
 
   const db = adminSupabase();
   try {
-    const slots = await availableSlots(serviceId, date, therapistId);
-    if (!slots.includes(startTime)) {
-      return NextResponse.json({ error: "That time is no longer available." }, { status: 409 });
-    }
-
-    const { data: service, error: serviceError } = await db
+    const { data: matchedServices, error: serviceError } = await db
       .from("services")
-      .select("id,duration_minutes,name")
-      .eq("id", serviceId)
-      .eq("is_active", true)
-      .maybeSingle();
+      .select("id,duration_minutes,name,price")
+      .in("id", effectiveServiceIds)
+      .eq("is_active", true);
 
     if (serviceError) {
       console.error("Booking service lookup failed", serviceError);
       return NextResponse.json({ error: "We could not verify this treatment." }, { status: 500 });
     }
-    if (!service) {
+    if (!matchedServices || matchedServices.length !== new Set(effectiveServiceIds).size) {
       return NextResponse.json({ error: "This treatment is unavailable." }, { status: 400 });
+    }
+    if (matchedServices.some((service) =>
+      !Number.isInteger(service.duration_minutes)
+      || service.duration_minutes < 1
+      || !Number.isFinite(Number(service.price))
+      || Number(service.price) <= 0)) {
+      return NextResponse.json({ error: "One or more treatments have invalid pricing or duration." }, { status: 400 });
+    }
+
+    const primaryService = matchedServices.find((s) => s.id === primaryServiceId) || matchedServices[0];
+    const totalDuration = matchedServices.reduce((sum, s) => sum + (s.duration_minutes || 0), 0);
+    const orderedServices = effectiveServiceIds.map((id) => matchedServices.find((service) => service.id === id)!);
+    const totalPrice = orderedServices.reduce((sum, service) => sum + Number(service.price), 0);
+    const serviceNames = orderedServices.map((service) => service.name).join(" + ");
+
+    const slots = await availableSlots(primaryServiceId, date, therapistId, totalDuration, effectiveServiceIds);
+    if (!slots.includes(startTime)) {
+      return NextResponse.json({ error: "That time is no longer available." }, { status: 409 });
     }
 
     const [hours, minutes, seconds = 0] = startTime.split(":").map(Number);
-    const endTotal = hours * 60 + minutes + service.duration_minutes;
+    const endTotal = hours * 60 + minutes + totalDuration;
     const endTime = `${String(Math.floor(endTotal / 60) % 24).padStart(2, "0")}:${String(endTotal % 60).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 
-    const assignedTherapistId = await findAvailableTherapistId(serviceId, date, startTime, endTime, therapistId);
+    const assignedTherapistId = await findAvailableTherapistId(
+      primaryService.id,
+      date,
+      startTime,
+      endTime,
+      therapistId,
+      effectiveServiceIds,
+    );
     if (!assignedTherapistId) {
       return NextResponse.json({ error: "That time is no longer available." }, { status: 409 });
     }
 
-    const { data, error } = await db
+    // 50% deposit calculation based on the total sum of all selected treatments
+    const depositAmount = Math.max(1, Math.round(totalPrice * 0.5));
+    const paystackRef = `cee_${randomUUID()}`;
+
+    // Prepare origin and callback URL for Paystack redirect
+    const callbackUrl = `${getPublicSiteUrl()}/booking/callback`;
+
+    // Initialize Paystack transaction for 50% deposit (card and bank_transfer only)
+    let paystackResult;
+    try {
+      const { initializePaystackTransaction } = await import("@/lib/paystack");
+      paystackResult = await initializePaystackTransaction({
+        email,
+        amountInNaira: depositAmount,
+        callbackUrl,
+        reference: paystackRef,
+        channels: ["card", "bank_transfer"],
+        metadata: {
+          service_id: primaryService.id,
+          service_ids: effectiveServiceIds,
+          service_name: serviceNames,
+          full_name: fullName,
+          email,
+          phone,
+          appointment_date: date,
+          start_time: startTime,
+          end_time: endTime,
+          therapist_id: assignedTherapistId,
+          deposit_amount: depositAmount,
+          full_price: totalPrice,
+          total_duration: totalDuration,
+          notes,
+        },
+      });
+    } catch (paystackErr: any) {
+      console.error("Paystack transaction initialize failed:", paystackErr);
+      return NextResponse.json(
+        { error: paystackErr.message || "Failed to initialize secure checkout with Paystack." },
+        { status: 502 },
+      );
+    }
+
+    // Insert pending appointment with paystack_reference and payment_status='pending'
+    const depositNote = `[Treatments: ${serviceNames} | Total: ₦${totalPrice.toLocaleString()} | 50% Deposit: ₦${depositAmount.toLocaleString()} | Ref: ${paystackResult.reference}]`;
+    const fullNotes = notes ? `${notes} ${depositNote}` : depositNote;
+
+    const { data: apptData, error: insertError } = await db
       .from("appointments")
       .insert({
-        service_id: serviceId,
+        service_id: primaryService.id,
         therapist_id: assignedTherapistId,
         appointment_date: date,
         start_time: startTime,
@@ -90,83 +168,30 @@ export async function POST(req: NextRequest) {
         full_name: fullName,
         email,
         phone,
-        notes: notes || null,
+        notes: fullNotes,
         status: "pending",
+        payment_status: "pending",
+        paystack_reference: paystackResult.reference,
       })
       .select("id,full_name,email,phone,appointment_date,start_time,services(name),therapists(full_name)")
       .single();
 
-    if (error) {
-      if (error.code === "23P01") {
+    if (insertError || !apptData) {
+      if (insertError?.code === "23P01") {
         return NextResponse.json({ error: "That time was just booked. Please choose another slot." }, { status: 409 });
       }
-      console.error("Appointment insert failed", error);
+      console.error("Appointment insert failed", insertError);
       return NextResponse.json({ error: "We could not save your appointment." }, { status: 500 });
     }
 
-    let clientEmailSent = false;
-    let ownerEmailSent = false;
-
-    if (emailIsConfigured()) {
-      const resend = new Resend(process.env.RESEND_API_KEY!);
-      const fromAddress = process.env.RESEND_FROM_EMAIL!;
-      const ownerAddress = process.env.OWNER_NOTIFICATION_EMAIL || process.env.RESEND_FROM_EMAIL!;
-
-      const appointmentData = {
-        full_name: data.full_name,
-        email: data.email,
-        phone: data.phone || phone,
-        notes: notes || null,
-        appointment_date: data.appointment_date,
-        start_time: data.start_time,
-        service_name: (data.services as unknown as { name: string } | null)?.name ?? service.name,
-        therapist_name: (data.therapists as unknown as { full_name: string } | null)?.full_name ?? null,
-      };
-
-      // 1. Send confirmation email to client
-      try {
-        const notification = await claimNotification(db, data.id, "request");
-        if (notification.claimed) {
-          const clientMessage = appointmentEmail(appointmentData, "request");
-          const { error: clientEmailError } = await resend.emails.send(
-            {
-              from: fromAddress,
-              to: data.email,
-              ...clientMessage,
-            },
-            { idempotencyKey: `appointment-${data.id}-request` },
-          );
-          if (clientEmailError) throw clientEmailError;
-          await finishNotification(db, notification.id, "sent");
-          clientEmailSent = true;
-        }
-      } catch (clientEmailError) {
-        console.error("Client confirmation email failed", clientEmailError);
-      }
-
-      // 2. Send owner notification email to spa admin
-      try {
-        const ownerMessage = ownerNotificationEmail(appointmentData);
-        const { error: ownerEmailError } = await resend.emails.send({
-          from: fromAddress,
-          to: ownerAddress,
-          ...ownerMessage,
-        });
-        if (ownerEmailError) throw ownerEmailError;
-        ownerEmailSent = true;
-      } catch (ownerEmailError) {
-        console.error("Owner notification email failed", ownerEmailError);
-      }
-    }
-
+    // Return the Paystack checkout URL so client can redirect immediately
     return NextResponse.json(
       {
-        appointment: data,
-        emailSent: clientEmailSent,
-        ownerEmailSent,
-        emailMessage: clientEmailSent
-          ? "A confirmation email has been sent to you. The spa team has also been notified."
-          : "Your booking request was saved. We will contact you to confirm shortly.",
+        success: true,
+        authorization_url: paystackResult.authorization_url,
+        reference: paystackResult.reference,
+        deposit_amount: depositAmount,
+        appointment_id: apptData.id,
       },
       { status: 201 },
     );

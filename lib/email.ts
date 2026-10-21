@@ -7,6 +7,10 @@ export type AppointmentEmail = {
   start_time: string;
   service_name: string;
   therapist_name?: string | null;
+  total_price?: number | null;
+  deposit_paid?: number | null;
+  balance_due?: number | null;
+  paystack_reference?: string | null;
 };
 
 export type AppointmentEmailKind = "request" | "confirmed" | "cancelled" | "reminder";
@@ -41,8 +45,8 @@ export function appointmentEmail(
       body: `Your request for ${details} has been received and is pending confirmation.`,
     },
     confirmed: {
-      subject: "Your Cee Essence appointment is confirmed",
-      body: `Your appointment for ${details} is confirmed. We look forward to welcoming you.`,
+      subject: "✨ Your Cee Essence Appointment is Confirmed",
+      body: `Your appointment for ${details} is confirmed. Your 50% advance deposit has been received.`,
     },
     cancelled: {
       subject: "An update to your Cee Essence appointment",
@@ -55,6 +59,19 @@ export function appointmentEmail(
   };
 
   const selected = copy[kind];
+
+  const paymentBlock =
+    appointment.deposit_paid != null
+      ? `
+        <div style="background: #fbf7ee; padding: 14px 18px; border: 1px solid rgba(201,164,99,0.3); margin: 18px 0;">
+          <h4 style="margin: 0 0 10px; color: #35432b; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;">Payment Summary</h4>
+          ${appointment.total_price ? `<p style="margin: 4px 0; font-size: 13px;"><strong>Total Treatment Fee:</strong> ₦${appointment.total_price.toLocaleString()}</p>` : ""}
+          <p style="margin: 4px 0; font-size: 13px; color: #2e6930;"><strong>✓ 50% Deposit Paid:</strong> ₦${appointment.deposit_paid.toLocaleString()} <span style="font-size: 11px; color: #666;">(Paystack: ${escapeHtml(appointment.paystack_reference || "Verified")})</span></p>
+          ${appointment.balance_due != null ? `<p style="margin: 4px 0; font-size: 13px;"><strong>Remaining Balance Due at Spa:</strong> ₦${appointment.balance_due.toLocaleString()}</p>` : ""}
+        </div>
+      `
+      : "";
+
   return {
     subject: selected.subject,
     html: `
@@ -68,7 +85,8 @@ export function appointmentEmail(
           <p style="margin: 4px 0;"><strong>Date:</strong> ${date}</p>
           <p style="margin: 4px 0;"><strong>Time:</strong> ${time}</p>
         </div>
-        <p style="font-size: 13px; color: #63594d;">Please arrive 10–15 minutes early. Payment is made upon arrival at the spa.</p>
+        ${paymentBlock}
+        <p style="font-size: 13px; color: #63594d;">Please arrive 5–10 minutes early. We look forward to welcoming and tending to you.</p>
         <p style="margin-top: 24px;">With warmth,<br/><strong>Cee Essence Spa &amp; Wellness</strong><br/><small>Shop P8, The Bints Centre by Haimbridge, Abuja</small></p>
       </div>
     `,
@@ -89,27 +107,26 @@ export function ownerNotificationEmail(
   const therapist = escapeHtml(appointment.therapist_name || "Unassigned / Any available");
 
   return {
-    subject: `✨ New Booking: ${service} - ${name}`,
+    subject: `✨ Paid Booking: ${service} - ${name}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; color: #1e1812; background: #faf5ea; border-top: 4px solid #35432b;">
-        <h2 style="color: #35432b; font-family: Georgia, serif; margin-top: 0;">New Appointment Booked</h2>
-        <p>A new appointment request was just submitted on the website.</p>
+        <h2 style="color: #35432b; font-family: Georgia, serif; margin-top: 0;">New Confirmed Appointment (50% Deposit Paid)</h2>
+        <p>A client has completed their 50% deposit via Paystack.</p>
         
         <div style="background: #ffffff; padding: 18px; border: 1px solid rgba(53,67,43,0.15); margin: 20px 0;">
           <h3 style="margin-top: 0; color: #35432b; border-bottom: 1px solid #eee; padding-bottom: 8px;">Client Details</h3>
           <p style="margin: 6px 0;"><strong>Name:</strong> ${name}</p>
-          <p style="margin: 6px 0;"><strong>Email:</strong> <a href="mailto:${email}">${email}</a></p>
-          <p style="margin: 6px 0;"><strong>Phone:</strong> <a href="tel:${phone}">${phone}</a></p>
-          
-          <h3 style="margin-top: 16px; color: #35432b; border-bottom: 1px solid #eee; padding-bottom: 8px;">Appointment Details</h3>
+          <p style="margin: 6px 0;"><strong>Email:</strong> ${email}</p>
+          <p style="margin: 6px 0;"><strong>Phone:</strong> ${phone}</p>
           <p style="margin: 6px 0;"><strong>Treatment:</strong> ${service}</p>
-          <p style="margin: 6px 0;"><strong>Preferred Therapist:</strong> ${therapist}</p>
-          <p style="margin: 6px 0;"><strong>Date:</strong> ${date}</p>
-          <p style="margin: 6px 0;"><strong>Time:</strong> ${time}</p>
-          <p style="margin: 6px 0;"><strong>Special Notes:</strong> ${notes}</p>
+          <p style="margin: 6px 0;"><strong>Therapist:</strong> ${therapist}</p>
+          <p style="margin: 6px 0;"><strong>Date &amp; Time:</strong> ${date} at ${time}</p>
+          ${appointment.deposit_paid ? `<p style="margin: 6px 0; color: #2e6930;"><strong>50% Deposit Received:</strong> ₦${appointment.deposit_paid.toLocaleString()}</p>` : ""}
+          ${appointment.balance_due != null ? `<p style="margin: 6px 0;"><strong>Balance to Collect at Spa:</strong> ₦${appointment.balance_due.toLocaleString()}</p>` : ""}
+          <p style="margin: 6px 0;"><strong>Notes:</strong> ${notes}</p>
         </div>
 
-        <p style="font-size: 12px; color: #63594d;">You can manage and confirm this booking in your <a href="https://cee-essence-spa-and-wellness-gas1bp3in.vercel.app/admin">Staff Portal</a>.</p>
+        <p style="font-size: 12px; color: #63594d;">You can manage and confirm this booking in your Staff Portal.</p>
       </div>
     `,
   };

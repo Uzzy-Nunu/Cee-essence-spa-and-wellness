@@ -1,32 +1,76 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { randomUUID } from "node:crypto";
 import { GoogleGenerativeAI, type Tool } from "@google/generative-ai";
 import { NextRequest, NextResponse } from "next/server";
-import { adminSupabase } from "@/lib/supabase";
+import { adminSupabase } from "@/lib/supabase-admin";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { availableSlots, findAvailableTherapistId } from "@/lib/availability";
 import { appointmentEmail, ownerNotificationEmail, emailIsConfigured } from "@/lib/email";
 import { Resend } from "resend";
 import { isValidDate, isValidTime } from "@/lib/booking-rules";
+import { getPublicSiteUrl } from "@/lib/site-url";
 
 // ---------------------------------------------------------------------------
 // System prompt
 // ---------------------------------------------------------------------------
-const SYSTEM_PROMPT = `You are the Cee Essence wellness concierge — warm, empathetic, professional, and efficient.
+// ---------------------------------------------------------------------------
+// Dynamic System prompt builder: Pulls live services & therapists from admin DB
+// ---------------------------------------------------------------------------
+function buildSystemPrompt(
+  services: Array<{ name: string; category?: string | null; duration_minutes: number; price: number; description?: string | null }>,
+  therapists: Array<{ full_name: string; bio?: string | null }>,
+  bookingPolicies?: string,
+): string {
+  let treatmentsText = "No treatments are currently active on the spa menu.";
+  if (services.length > 0) {
+    const grouped: Record<string, string[]> = {};
+    for (const s of services) {
+      const cat = s.category?.trim() || "General Treatments";
+      if (!grouped[cat]) grouped[cat] = [];
+      const cleanDesc = s.description ? s.description.replace(/\[img:(.*?)\]/g, "").trim() : "";
+      const descPart = cleanDesc ? ` — ${cleanDesc}` : "";
+      grouped[cat].push(`- **${s.name}** (${s.duration_minutes} min, ₦${s.price.toLocaleString()})${descPart}`);
+    }
+    treatmentsText = Object.entries(grouped)
+      .map(([cat, items]) => `${cat}:\n${items.join("\n")}`)
+      .join("\n\n");
+  }
+
+  const therapistsText = therapists.length > 0
+    ? therapists.map((t) => `- **${t.full_name}**${t.bio ? `: ${t.bio}` : ""}`).join("\n")
+    : "Professional certified wellness therapists.";
+
+  const policiesSummary = bookingPolicies
+    ? bookingPolicies.trim()
+    : "A 50% advance deposit is required via Paystack to confirm reservations; the remaining balance is due at the spa. 24 hours notice required for cancellations or rescheduling. Please arrive 5–10 minutes early.";
+
+  return `You are Ask Cee, the Cee Essence wellness concierge — warm, empathetic, professional, and efficient.
 
 BUSINESS FACTS (use only these, never invent):
 - Name: Cee Essence Spa & Wellness — "Where beauty meets refined wellness"
 - Location: Shop P8, The Bints Centre by Haimbridge, Abuja
 - Phone: +234 800 CEE-SPA1 | Email: hello@ceeessencespa.com
 - Hours: Mon–Sat 10:00am–8:00pm, Sunday 12:00pm–6:00pm
-- 2-hour advance booking notice required. Payment at spa upon arrival.
-- Arrive 10–15 minutes early. Rescheduling free up to 24 hours in advance.
+- 2-hour advance booking notice required.
+- Payment: 50% deposit required online via Paystack to confirm reservation; the remaining balance payment is due at the spa.
+- Arrival: Arrive 5–10 minutes early. Cancellations/rescheduling free with 24 hours advance notice.
 
-TREATMENTS:
-Massage: Signature Cee Essence Massage (75 min, ₦55,000), Swedish Massage (60 min, ₦35,000), Deep Tissue Massage (60 min, ₦40,000), Hot Stone Massage (75 min, ₦45,000), Aromatherapy Massage (60 min, ₦38,000), Couple's Massage (60 min, ₦75,000 for two), Prenatal Massage (60 min, ₦38,000)
-Facials: Signature Facial (60 min, ₦35,000), Hydrating Facial (45 min, ₦28,000), Brightening Facial (60 min, ₦40,000), Anti-Aging Facial (60 min, ₦45,000), Deep Cleansing Facial (45 min, ₦30,000)
-Body: Body Scrub & Polish (45 min, ₦30,000), Detox Body Wrap (60 min, ₦40,000), Half-Day Pamper Package (3 hrs, ₦90,000)
-Hand & Foot: Signature Pedicure (60 min, ₦20,000), Signature Manicure (45 min, ₦16,000), Foot Reflexology (45 min, ₦22,000)
-Therapists: Amaka O. (Massages), Chiamaka B. (Facials), Grace N. (Body & Nail)
+OFFICIAL BOOKING & SPA POLICIES (call check_policies tool for full live policy details):
+${policiesSummary}
+
+AVAILABLE TREATMENTS (STRICT: These are the ONLY treatments offered, dynamically loaded in real-time from our live admin dashboard. Never mention, recommend, or invent any service that is not in this exact list):
+${treatmentsText}
+
+ACTIVE THERAPISTS:
+${therapistsText}
+
+CRITICAL RULES FOR TREATMENT INQUIRIES:
+- You must ONLY recommend or confirm treatments that exist in the "AVAILABLE TREATMENTS" list above.
+- If a guest asks about a treatment category or service that is NOT in the list above (for example, foot care, pedicure, or a treatment not currently listed), politely and warmly state that we do not currently offer that specific treatment on our menu. Then graciously share what treatments ARE currently available from our menu.
+- Never make up prices, durations, or treatments. Only use the treatments listed above.
+
+POLICY INQUIRIES:
+- Whenever a guest asks about cancellation rules, deposit requirements, refunds, late arrivals, or policies, you can answer concisely from the policies above or call the check_policies tool. Always emphasize the 50% deposit policy clearly and warmly.
 
 FORMATTING RULES:
 - Use clear line breaks between paragraphs. Never write a solid wall of text.
@@ -63,7 +107,8 @@ When a guest asks to book, collect:
 2. Preferred date (YYYY-MM-DD)
 3. Preferred time (call check_available_slots to show options first)
 4. Full name, email, and phone number
-When you have all confirmed fields, call book_appointment immediately.`;
+When you have all confirmed fields, call book_appointment immediately. Remind them that a 50% deposit secures their reservation.`;
+}
 
 // ---------------------------------------------------------------------------
 // Tool definitions
@@ -71,6 +116,14 @@ When you have all confirmed fields, call book_appointment immediately.`;
 const TOOLS: Tool[] = [
   {
     functionDeclarations: [
+      {
+        name: "check_policies",
+        description: "Check the spa's official booking, cancellation, rescheduling, 50% deposit, and attendance policies. Call this whenever a guest asks about policies, deposits, cancellation rules, late arrivals, or rescheduling.",
+        parameters: {
+          type: "OBJECT" as any,
+          properties: {},
+        },
+      },
       {
         name: "check_available_slots",
         description: "Check available time slots for a treatment on a given date. Call this when a guest is looking for a time to book.",
@@ -124,18 +177,34 @@ const TOOLS: Tool[] = [
 async function handleCheckSlots(args: Record<string, string>): Promise<{ reply: string }> {
   const { service_name, date } = args;
   if (!isValidDate(date)) {
-    return { reply: "Could you please provide the date in **YYYY-MM-DD** format (e.g., 2026-10-15) so I can check availability?" };
+    return { reply: "Could you please provide the date in **YYYY-MM-DD** format (e.g., 2026-10-25) so I can check availability for you?" };
   }
   try {
-    const slots = await availableSlots(service_name, date);
+    const db = adminSupabase();
+    // Resolve service to its actual UUID
+    const { data: service } = await db
+      .from("services")
+      .select("id,name,duration_minutes,price")
+      .ilike("name", `%${service_name.trim()}%`)
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle();
+
+    if (!service) {
+      return {
+        reply: `I could not locate the treatment **${service_name}** on our active menu. Please let me know which treatment you'd like, or ask me to show you our available services!`,
+      };
+    }
+
+    const slots = await availableSlots(service.id, date);
     if (!slots || slots.length === 0) {
       return {
-        reply: `We do not have any open slots for **${service_name}** on **${date}**.\n\nWould you like to try a different date or another treatment?`,
+        reply: `We do not have any open slots for **${service.name}** on **${date}**.\n\nWould you like to try another date?`,
       };
     }
     const slotList = slots.slice(0, 8).map((s) => `- **${s.slice(0, 5)}**`).join("\n");
     return {
-      reply: `Here are the available time slots for **${service_name}** on **${date}**:\n\n${slotList}\n\nWhich time works best for you? Let me know, along with your full name, email, and phone number, and I will gladly reserve it!`,
+      reply: `Here are available times for **${service.name}** (${service.duration_minutes} min, ₦${service.price.toLocaleString()}) on **${date}**:\n\n${slotList}\n\nTo reserve a slot, let me know your preferred time along with your **Full Name**, **Phone Number**, and **Email Address**!`,
     };
   } catch (err) {
     console.error("check_available_slots error", err);
@@ -145,6 +214,20 @@ async function handleCheckSlots(args: Record<string, string>): Promise<{ reply: 
 
 async function handleBookAppointment(args: Record<string, string>): Promise<{ reply: string }> {
   const { service_name, appointment_date, start_time, client_name, client_email, client_phone, notes = "" } = args;
+  const normEmail = client_email.trim().toLowerCase();
+  const normPhone = client_phone.trim();
+  const normName = client_name.trim();
+  if (
+    normName.length < 2
+    || normName.length > 120
+    || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normEmail)
+    || normEmail.length > 254
+    || normPhone.length < 6
+    || normPhone.length > 40
+    || notes.length > 2000
+  ) {
+    return { reply: "Please provide a valid full name, email address, phone number, and notes within the allowed length." };
+  }
 
   if (!isValidDate(appointment_date)) {
     return { reply: "Please provide a valid appointment date in **YYYY-MM-DD** format." };
@@ -159,14 +242,18 @@ async function handleBookAppointment(args: Record<string, string>): Promise<{ re
   // Find service
   const { data: service } = await db
     .from("services")
-    .select("id,name,duration_minutes")
-    .ilike("name", `%${service_name}%`)
+    .select("id,name,duration_minutes,price")
+    .ilike("name", `%${service_name.trim()}%`)
     .eq("is_active", true)
     .limit(1)
     .maybeSingle();
 
   if (!service) {
-    return { reply: `I could not locate the treatment **${service_name}** in our system. Please check the name or ask me for our treatment menu.` };
+    return { reply: `I could not locate the treatment **${service_name}** in our active system. Please check the name or ask me for our menu.` };
+  }
+  if (!Number.isInteger(service.duration_minutes) || service.duration_minutes < 1
+    || !Number.isFinite(Number(service.price)) || Number(service.price) <= 0) {
+    return { reply: "This treatment cannot be booked right now because its price or duration is invalid. Please contact our team." };
   }
 
   // Verify slot availability
@@ -180,7 +267,7 @@ async function handleBookAppointment(args: Record<string, string>): Promise<{ re
 
   // Calculate end time
   const [h, m] = normTime.split(":").map(Number);
-  const endTotal = h * 60 + m + service.duration_minutes;
+  const endTotal = h * 60 + m + (service.duration_minutes || 60);
   const endTime = `${String(Math.floor(endTotal / 60) % 24).padStart(2, "0")}:${String(endTotal % 60).padStart(2, "0")}:00`;
 
   // Find therapist
@@ -189,9 +276,50 @@ async function handleBookAppointment(args: Record<string, string>): Promise<{ re
     return { reply: "No therapist is available at that specific time. Please select another slot." };
   }
 
-  const normEmail = client_email.trim().toLowerCase();
-  const normPhone = client_phone.trim();
-  const normName = client_name.trim();
+  // 50% deposit calculation & Paystack checkout URL
+  const depositAmount = Math.max(1, Math.round((service.price || 0) * 0.5));
+  const paystackRef = `cee_chat_${randomUUID()}`;
+  let origin: string;
+  try {
+    origin = getPublicSiteUrl();
+  } catch (error) {
+    console.error("Concierge booking site URL is invalid", error);
+    return { reply: "Secure checkout is temporarily unavailable. Please contact our team to complete your booking." };
+  }
+  let payUrl = "";
+
+  try {
+    const { initializePaystackTransaction } = await import("@/lib/paystack");
+    const paystackResult = await initializePaystackTransaction({
+      email: normEmail,
+      amountInNaira: depositAmount,
+      callbackUrl: `${origin}/booking/callback`,
+      reference: paystackRef,
+      channels: ["card", "bank_transfer"],
+      metadata: {
+        service_id: service.id,
+        service_name: service.name,
+        full_name: normName,
+        email: normEmail,
+        phone: normPhone,
+        appointment_date,
+        start_time: normTime,
+        end_time: endTime,
+        therapist_id: therapistId,
+        deposit_amount: depositAmount,
+        full_price: service.price,
+        source: "chatbot",
+        notes,
+      },
+    });
+    payUrl = paystackResult.authorization_url;
+  } catch (paystackErr) {
+    console.error("Chatbot Paystack initialization failed:", paystackErr);
+    return { reply: "Secure checkout is temporarily unavailable, so I have not created a booking. Please try again or contact our team." };
+  }
+
+  const depositNote = `[Treatments: ${service.name} | Total: ₦${(service.price || 0).toLocaleString()} | 50% Deposit: ₦${depositAmount.toLocaleString()} | Ref: ${paystackRef}]`;
+  const fullNotes = notes ? `${notes} ${depositNote}` : depositNote;
 
   // Insert appointment
   const { data: appt, error } = await db
@@ -205,44 +333,23 @@ async function handleBookAppointment(args: Record<string, string>): Promise<{ re
       full_name: normName,
       email: normEmail,
       phone: normPhone,
-      notes: notes || null,
+      notes: fullNotes,
       status: "pending",
+      payment_status: "pending",
+      paystack_reference: paystackRef,
     })
     .select("id,full_name,email,appointment_date,start_time,therapists(full_name)")
     .single();
 
   if (error || !appt) {
     console.error("Concierge booking insert failed", error);
-    return { reply: "I apologize, but I could not save your appointment at this moment. Please try again or contact our front desk." };
+    return { reply: "I apologize, but I could not save your reservation right now. Please try booking directly via our booking form above." };
   }
 
   const therapistName = (appt.therapists as unknown as { full_name: string } | null)?.full_name ?? null;
 
-  // Send emails (non-blocking)
-  void (async () => {
-    if (!emailIsConfigured()) return;
-    const resend = new Resend(process.env.RESEND_API_KEY!);
-    const from = process.env.RESEND_FROM_EMAIL!;
-    const emailData = {
-      full_name: appt.full_name,
-      email: appt.email,
-      phone: normPhone,
-      notes: notes || null,
-      appointment_date: appt.appointment_date,
-      start_time: appt.start_time,
-      service_name: service.name,
-      therapist_name: therapistName,
-    };
-    try { await resend.emails.send({ from, to: appt.email, ...appointmentEmail(emailData, "request") }); }
-    catch (e) { console.error("Client email failed", e); }
-    try {
-      const owner = process.env.OWNER_NOTIFICATION_EMAIL || from;
-      await resend.emails.send({ from, to: owner, ...ownerNotificationEmail(emailData) });
-    } catch (e) { console.error("Owner email failed", e); }
-  })();
-
   return {
-    reply: `✨ **Your appointment has been reserved!**\n\nHere are your booking details:\n- **Treatment**: ${service.name}\n- **Date**: ${appointment_date}\n- **Time**: ${normTime.slice(0, 5)}\n- **Guest**: ${normName}\n- **Therapist**: ${therapistName || "Any available therapist"}\n- **Confirmation**: Sent to ${normEmail}\n\nOur spa team has been notified. Payment is made upon arrival at the spa. We look forward to welcoming you!`,
+    reply: `✨ **Your appointment has been reserved!**\n\n**Reservation Details:**\n- **Treatment**: ${service.name}\n- **Date**: ${appointment_date}\n- **Time**: ${normTime.slice(0, 5)}\n- **Guest**: ${normName}\n- **Therapist**: ${therapistName || "Any available therapist"}\n- **50% Deposit Due**: ₦${depositAmount.toLocaleString()} *(Balance ₦${(service.price - depositAmount).toLocaleString()} payable at spa)*\n\nTo hold and confirm your booking, please complete your secure 50% deposit using Card or Bank Transfer:\n👉 [**Complete 50% Deposit on Paystack →**](${payUrl || `${origin}/#book`})\n\n*(Your slot is held while awaiting payment.)*`,
   };
 }
 
@@ -285,7 +392,26 @@ async function handleRaiseTicket(args: Record<string, string>): Promise<{ reply:
   };
 }
 
+async function handleCheckPolicies(): Promise<{ reply: string }> {
+  try {
+    const db = adminSupabase();
+    const { data } = await db.from("spa_settings").select("booking_policies").limit(1).maybeSingle();
+    const policies = data?.booking_policies?.trim();
+    if (policies) {
+      return {
+        reply: `Here are our official Cee Essence policies:\n\n${policies}\n\nLet me know if you would like me to assist with reserving a treatment!`,
+      };
+    }
+  } catch (err) {
+    console.error("check_policies error", err);
+  }
+  return {
+    reply: "Our official booking guidelines require a **50% advance deposit** to confirm your reservation, with at least 24 hours notice for rescheduling or cancellations. We kindly ask guests to arrive 5–10 minutes prior to their session.",
+  };
+}
+
 async function executeTool(name: string, args: Record<string, string>): Promise<{ reply: string }> {
+  if (name === "check_policies") return handleCheckPolicies();
   if (name === "check_available_slots") return handleCheckSlots(args);
   if (name === "book_appointment") return handleBookAppointment(args);
   if (name === "raise_support_ticket") return handleRaiseTicket(args);
@@ -293,26 +419,70 @@ async function executeTool(name: string, args: Record<string, string>): Promise<
 }
 
 // ---------------------------------------------------------------------------
-// Constants
+// In-Memory Spa Context Cache (Drastically reduces DB round trips & lag)
+// ---------------------------------------------------------------------------
+type CachedSpaContext = {
+  timestamp: number;
+  services: any[];
+  therapists: any[];
+  policies: string;
+};
+
+let cachedSpaData: CachedSpaContext | null = null;
+const CACHE_TTL_MS = 300 * 1000; // 5 minutes TTL for ultra-fast replies
+
+async function getLiveSpaContext(db: any): Promise<CachedSpaContext> {
+  const now = Date.now();
+  if (cachedSpaData && now - cachedSpaData.timestamp < CACHE_TTL_MS) {
+    return cachedSpaData;
+  }
+
+  try {
+    const [{ data: activeServices }, { data: activeTherapists }, { data: settings }] = await Promise.all([
+      db.from("services").select("name,category,duration_minutes,price,description").eq("is_active", true).order("category").order("price"),
+      db.from("therapists").select("full_name,bio").eq("is_active", true),
+      db.from("spa_settings").select("booking_policies").limit(1).maybeSingle(),
+    ]);
+
+    cachedSpaData = {
+      timestamp: now,
+      services: activeServices || [],
+      therapists: activeTherapists || [],
+      policies: settings?.booking_policies || "",
+    };
+    return cachedSpaData;
+  } catch (err) {
+    console.warn("Spa context cache fetch fallback:", err);
+    if (cachedSpaData) return cachedSpaData;
+    return { timestamp: now, services: [], therapists: [], policies: "" };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Constants & Models (Prioritize fast gemini-3.5-flash)
 // ---------------------------------------------------------------------------
 const sessionIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const CANDIDATE_MODELS = Array.from(new Set([
-  process.env.GEMINI_MODEL || "gemini-3.5-flash-lite",
-  "gemini-3.5-flash-lite",
-  "gemini-3.5-flash",
-  "gemini-3.7-flash",
-]));
+const CANDIDATE_MODELS = Array.from(
+  new Set([
+    process.env.GEMINI_MODEL || "gemini-3.5-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+  ]),
+);
 
 // ---------------------------------------------------------------------------
 // POST handler
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest) {
   try {
-    if (!await enforceRateLimit(req, "concierge", 20, 60)) {
+    if (!await enforceRateLimit(req, "chat", 30, 60)) {
       return NextResponse.json({ error: "Please wait a moment before sending another message." }, { status: 429 });
     }
-  } catch (e) { console.error("Rate-limit check failed", e); }
+  } catch (error) {
+    console.error("Chat rate-limit check failed", error);
+    return NextResponse.json({ error: "The concierge is temporarily unavailable." }, { status: 503 });
+  }
 
   let body: { message?: unknown; sessionId?: unknown };
   try { body = await req.json(); }
@@ -335,32 +505,42 @@ export async function POST(req: NextRequest) {
   const db = adminSupabase();
   const userMessage = body.message.trim();
 
-  // Log user message asynchronously (non-blocking)
+  // Log user message asynchronously without blocking the reply
   void Promise.resolve(
     db.from("chat_logs").insert({ session_id: sessionId, role: "user", message: userMessage }),
   ).catch((e: unknown) => console.warn("chat_logs user write failed", e));
 
   try {
-    // Fetch recent chat history
-    let history: Array<{ role: string; parts: Array<{ text: string }> }> = [];
-    try {
-      const { data: logs } = await db
-        .from("chat_logs")
-        .select("role,message")
-        .eq("session_id", sessionId)
-        .order("created_at", { ascending: false })
-        .limit(10);
+    // 1. Concurrently fetch chat history & cached spa context in parallel
+    const [historyLogs, spaContext] = await Promise.all([
+      Promise.resolve(
+        db
+          .from("chat_logs")
+          .select("role,message")
+          .eq("session_id", sessionId)
+          .order("created_at", { ascending: false })
+          .limit(8),
+      ).catch(() => ({ data: [] })),
+      getLiveSpaContext(db),
+    ]);
 
-      if (logs && logs.length > 0) {
-        const reversed = logs.reverse();
-        for (const entry of reversed) {
-          const role = entry.role === "user" ? "user" : "model";
-          if (history.length > 0 && history[history.length - 1].role === role) continue;
-          history.push({ role, parts: [{ text: entry.message }] });
-        }
-        while (history.length > 0 && history[0].role !== "user") history.shift();
+    let history: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+    const logs = historyLogs.data;
+    if (logs && logs.length > 0) {
+      const reversed = [...logs].reverse();
+      for (const entry of reversed) {
+        const role = entry.role === "user" ? "user" : "model";
+        if (history.length > 0 && history[history.length - 1].role === role) continue;
+        history.push({ role, parts: [{ text: entry.message }] });
       }
-    } catch (e) { console.warn("chat history fetch failed", e); }
+      while (history.length > 0 && history[0].role !== "user") history.shift();
+    }
+
+    const systemPrompt = buildSystemPrompt(
+      spaContext.services,
+      spaContext.therapists,
+      spaContext.policies,
+    );
 
     const genAI = new GoogleGenerativeAI(apiKey);
     let reply = "";
@@ -370,9 +550,12 @@ export async function POST(req: NextRequest) {
       try {
         const model = genAI.getGenerativeModel({
           model: modelName,
-          systemInstruction: SYSTEM_PROMPT,
+          systemInstruction: systemPrompt,
           tools: TOOLS,
-          generationConfig: { maxOutputTokens: 600, temperature: 0.7 },
+          generationConfig: {
+            maxOutputTokens: 380,
+            temperature: 0.3, // Snappier, more focused and deterministic
+          },
         });
 
         const chat = model.startChat({ history: history as any });

@@ -6,6 +6,7 @@ export type Service = {
   duration_minutes: number;
   price: number;
   is_active: boolean;
+  image_url?: string | null;
 };
 
 export type Therapist = {
@@ -28,6 +29,24 @@ export type Settings = {
   spa_address: string | null;
   slot_interval_minutes: number;
   booking_notice_hours: number;
+  booking_policies?: string | null;
+};
+
+export type Appointment = {
+  id: string;
+  service_id: string;
+  therapist_id?: string | null;
+  appointment_date: string;
+  start_time: string;
+  end_time: string;
+  full_name: string;
+  email: string;
+  phone: string;
+  notes?: string | null;
+  status: "pending" | "confirmed" | "cancelled" | "completed";
+  payment_status?: "pending" | "paid" | "failed" | null;
+  paystack_reference?: string | null;
+  created_at: string;
 };
 
 export type BusinessHour = {

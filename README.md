@@ -24,7 +24,7 @@ Next.js 15 booking and operations site backed by Supabase.
 - Gemini-powered chat concierge with per-browser conversation history and human support-ticket handoff.
 - Database-backed rate limits for booking, chat, and support-ticket APIs.
 
-The original Supabase schema has already been applied to the project. Do not rerun `supabase/schema.sql` or `supabase/data-update.sql`. Before deploying this version, apply the additive migration `supabase/migrations/20261006120000_booking_delivery_and_conflicts.sql` in the Supabase SQL editor. It adds an appointment overlap constraint, notification delivery ledger and atomic API rate-limit function, and removes the old public appointment and support-ticket insert policies. The migration expects no existing overlapping appointments for the same therapist; resolve any such rows before applying it.
+The original Supabase schema has already been applied to the project. Do not rerun `supabase/schema.sql` or `supabase/data-update.sql`. Before deploying this version, apply the additive migrations `supabase/migrations/20261006120000_booking_delivery_and_conflicts.sql`, `supabase/migrations/20261020_add_payment_status.sql`, and `supabase/migrations/20261020_security_hardening.sql` in the Supabase SQL editor. They add an appointment overlap constraint, notification delivery ledger, atomic API rate-limit function, payment fields and role-aware RLS policies, and remove public appointment and support-ticket insert policies. The overlap migration expects no existing overlapping appointments for the same therapist; resolve any such rows before applying it.
 
 ## Required configuration
 
@@ -32,19 +32,24 @@ Set the following in `.env.local` and in the hosting provider's production envir
 
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `NEXT_PUBLIC_SITE_URL` (trusted HTTPS public site origin used to build payment callbacks; use `http://localhost:3000` only for local development)
 - `SUPABASE_SERVICE_ROLE_KEY` (server-side only; never expose or commit it)
 - `RATE_LIMIT_SECRET` (long, random value used to hash client IPs for rate-limit keys)
 - `CRON_SECRET` (long, random value sent as a bearer token to the reminder endpoint)
+- `KNOWLEDGE_INGEST_SECRET` (long, random value protecting the knowledge-ingestion endpoint)
 
 For email, set `RESEND_API_KEY` and `RESEND_FROM_EMAIL` to a verified sender. For chat, set `GEMINI_API_KEY`; `GEMINI_MODEL` defaults to `gemini-2.5-flash`. `SLACK_WEBHOOK_URL` is optional and sends staff alerts for new support tickets.
+For online deposits, configure `PAYSTACK_SECRET_KEY`; keep it server-side and never add the `NEXT_PUBLIC_` prefix.
 
-Create staff accounts in Supabase Auth and add their user UUIDs to `admin_users`. The dashboard uses authenticated Supabase requests protected by the database's admin RLS policies. The server-side appointment-status API independently validates the Supabase access token and admin membership.
+Create staff accounts from the Super Admin Team tab, which stores each role in the server-controlled `admin_users.role` column. Regular admins can view operational data and update support tickets; Super Admins can manage spa data and team accounts. The dashboard uses authenticated Supabase requests protected by role-aware RLS policies, and privileged APIs independently validate Supabase access tokens and staff roles. Do not use editable Auth user metadata to grant roles.
+
+If the owner can sign in but sees an access-restricted message, run `supabase/admin-setup.sql` in the Supabase SQL Editor. It adds the owner’s existing Auth account to `admin_users` as a Super Admin and prints the resulting authorization status; it does not reset the account password.
 
 `vercel.json` schedules the reminder job daily at 08:00 UTC. It sends deduplicated next-day reminders in Abuja's timezone and retries eligible failed booking/status emails (up to five attempts within seven days). Set `CRON_SECRET` in Vercel so scheduled requests are authorized. Email delivery requires the database migration and both Resend variables.
 
 ## Production launch checklist
 
-- Apply the additive SQL migration after confirming the overlap constraint can be created.
+- Apply the additive SQL migrations after confirming the overlap constraint can be created; verify the designated owner is a Super Admin.
 - Configure and verify all production environment variables; use distinct strong random secrets for rate limiting and cron authentication.
 - Verify Resend domain/sender and send test booking, status-change, and reminder emails.
 - Create admin users and verify non-admin accounts cannot access staff data.

@@ -27,6 +27,10 @@ test("offers slots that satisfy opening hours, duration, and notice", () => {
   assert.deepEqual(calculateAvailableSlots(common), ["10:00:00", "10:30:00", "11:00:00"]);
 });
 
+test("requires the full combined treatment duration to fit within business hours", () => {
+  assert.deepEqual(calculateAvailableSlots({ ...common, durationMinutes: 120 }), ["10:00:00"]);
+});
+
 test("removes slots that overlap an appointment but permits adjacent appointments", () => {
   const slots = calculateAvailableSlots({
     ...common,

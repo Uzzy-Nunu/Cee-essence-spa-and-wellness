@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Resend } from "resend";
 import { appointmentEmail } from "@/lib/email";
 import { claimNotification, finishNotification } from "@/lib/notifications";
-import { adminSupabase } from "@/lib/supabase";
+import { adminSupabase } from "@/lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
 

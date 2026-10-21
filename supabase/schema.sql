@@ -63,6 +63,7 @@ create table spa_settings (
 create table admin_users (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null unique references auth.users(id) on delete cascade,
+  role text not null default 'admin' check (role in ('admin', 'super_admin')),
   created_at timestamp with time zone default now()
 );
 
@@ -250,10 +251,6 @@ on admin_users
 for select
 to authenticated
 using (auth.uid() = user_id);
-
--- Replace with your real auth user UID (Supabase Dashboard > Authentication > Users)
-insert into admin_users (user_id) values ('PASTE_YOUR_AUTH_USER_ID_HERE');
-
 
 -- ============================================================
 -- SECTION 2: ADDITIONS (therapists, support tickets, RAG chatbot)

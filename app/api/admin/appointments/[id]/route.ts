@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { authorizedAdmin } from "@/lib/admin-auth";
-import { adminSupabase } from "@/lib/supabase";
+import { getAuthenticatedAdmin } from "@/lib/admin-auth";
+import { adminSupabase } from "@/lib/supabase-admin";
 import { appointmentEmail, emailIsConfigured } from "@/lib/email";
 import { claimNotification, finishNotification } from "@/lib/notifications";
 import { Resend } from "resend";
@@ -10,8 +10,12 @@ type AppointmentStatus = typeof validStatuses[number];
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    if (!await authorizedAdmin(req)) {
+    const admin = await getAuthenticatedAdmin(req);
+    if (!admin) {
       return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+    }
+    if (!admin.isSuperAdmin) {
+      return NextResponse.json({ error: "Only Super Admins can change appointment status." }, { status: 403 });
     }
 
     const { id } = await params;
