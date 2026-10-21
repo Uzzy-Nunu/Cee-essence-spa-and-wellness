@@ -1943,14 +1943,26 @@ footer.boutique-footer {
 /* ── Mobile (≤768px) ── */
 @media (max-width: 768px) {
   /* Nav */
-  nav { padding: 0 18px; height: 68px; }
+  nav { padding: 0 18px; height: 68px; z-index: 101; }
   .navlinks { display: none; }
   .nav-btn { display: none; }
   .mobile-menu-btn { display: flex; }
+  .mobile-nav-panel {
+    position: relative;
+    top: auto;
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow-y: auto;
+    flex: 0 0 min(320px, 85vw);
+    justify-content: flex-start;
+    align-items: stretch;
+    padding: max(32px, env(safe-area-inset-top)) 28px max(32px, env(safe-area-inset-bottom));
+  }
 
   /* Hero */
   .hero { height: min(620px, 90vh); min-height: 460px; }
-  .hero-copy { margin-left: 6vw; top: 48%; width: min(90vw, 480px); }
+  .hero-copy { margin-left: 6vw; top: auto; width: min(88vw, 480px); }
   .hero h1 { font-size: clamp(40px, 10vw, 64px); }
   .hero-copy p { font-size: 13px; max-width: 90vw; }
 
