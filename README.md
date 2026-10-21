@@ -36,11 +36,11 @@ Set the following in `.env.local` and in the hosting provider's production envir
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - `NEXT_PUBLIC_SITE_URL` (trusted HTTPS public site origin used to build payment callbacks; use `http://localhost:3000` only for local development)
 - `SUPABASE_SERVICE_ROLE_KEY` (server-side only; never expose or commit it)
-- `RATE_LIMIT_SECRET` (long, random value used to hash client IPs for rate-limit keys)
+- `RATE_LIMIT_SECRET` (long, random value used to hash client IPs for rate-limit keys; if omitted, the server logs a warning and derives a purpose-specific key from `SUPABASE_SERVICE_ROLE_KEY`)
 - `CRON_SECRET` (long, random value sent as a bearer token to the reminder endpoint)
 - `KNOWLEDGE_INGEST_SECRET` (long, random value protecting the knowledge-ingestion endpoint)
 
-For email, set `RESEND_API_KEY` and `RESEND_FROM_EMAIL` to a verified sender. For chat, set `GEMINI_API_KEY`; `GEMINI_MODEL` defaults to `gemini-2.5-flash`. `SLACK_WEBHOOK_URL` is optional and sends staff alerts for new support tickets.
+For email, set `RESEND_API_KEY` and `RESEND_FROM_EMAIL` to a verified sender. For chat, set `GEMINI_API_KEY`; `GEMINI_MODEL` defaults to `gemini-3.5-flash-lite`. `SLACK_WEBHOOK_URL` is optional and sends staff alerts for new support tickets.
 For online deposits, configure `PAYSTACK_SECRET_KEY`; keep it server-side and never add the `NEXT_PUBLIC_` prefix.
 
 Create staff accounts from the Super Admin Team tab, which stores each role in the server-controlled `admin_users.role` column. Regular admins can view operational data and update support tickets; Super Admins can manage spa data and team accounts. The dashboard uses authenticated Supabase requests protected by role-aware RLS policies, and privileged APIs independently validate Supabase access tokens and staff roles. Do not use editable Auth user metadata to grant roles.

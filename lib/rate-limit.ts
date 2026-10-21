@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { NextRequest } from "next/server";
 import { adminSupabase } from "./supabase-admin";
+import { getRateLimitSecret } from "./rate-limit-secret";
 
 export async function enforceRateLimit(
   req: NextRequest,
@@ -8,8 +9,7 @@ export async function enforceRateLimit(
   limit: number,
   windowSeconds: number,
 ): Promise<boolean> {
-  const secret = process.env.RATE_LIMIT_SECRET;
-  if (!secret) throw new Error("RATE_LIMIT_SECRET is not configured.");
+  const secret = getRateLimitSecret();
   const address =
     req.headers.get("x-vercel-forwarded-for") ||
     req.headers.get("x-real-ip") ||

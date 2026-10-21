@@ -51,6 +51,8 @@ for each row execute function prevent_last_super_admin_removal();
 
 drop policy if exists "Anyone can read active services" on services;
 drop policy if exists "Admins can manage services" on services;
+drop policy if exists "Public and staff can read services" on services;
+drop policy if exists "Super admins can manage services" on services;
 create policy "Public and staff can read services"
 on services for select to anon, authenticated
 using (
@@ -65,6 +67,8 @@ with check (exists (select 1 from admin_users where user_id = auth.uid() and rol
 drop policy if exists "Anyone can create appointments" on appointments;
 drop policy if exists "Admins can read appointments" on appointments;
 drop policy if exists "Admins can update appointments" on appointments;
+drop policy if exists "Staff can read appointments" on appointments;
+drop policy if exists "Super admins can update appointments" on appointments;
 create policy "Staff can read appointments"
 on appointments for select to authenticated
 using (exists (select 1 from admin_users where user_id = auth.uid()));
@@ -75,6 +79,7 @@ with check (exists (select 1 from admin_users where user_id = auth.uid() and rol
 
 drop policy if exists "Anyone can read business hours" on business_hours;
 drop policy if exists "Admins can manage business hours" on business_hours;
+drop policy if exists "Super admins can manage business hours" on business_hours;
 create policy "Anyone can read business hours"
 on business_hours for select to anon, authenticated using (true);
 create policy "Super admins can manage business hours"
@@ -84,6 +89,7 @@ with check (exists (select 1 from admin_users where user_id = auth.uid() and rol
 
 drop policy if exists "Anyone can read blocked dates" on blocked_dates;
 drop policy if exists "Admins can manage blocked dates" on blocked_dates;
+drop policy if exists "Super admins can manage blocked dates" on blocked_dates;
 create policy "Anyone can read blocked dates"
 on blocked_dates for select to anon, authenticated using (true);
 create policy "Super admins can manage blocked dates"
@@ -93,6 +99,7 @@ with check (exists (select 1 from admin_users where user_id = auth.uid() and rol
 
 drop policy if exists "Anyone can read spa settings" on spa_settings;
 drop policy if exists "Admins can manage spa settings" on spa_settings;
+drop policy if exists "Super admins can manage spa settings" on spa_settings;
 create policy "Anyone can read spa settings"
 on spa_settings for select to anon, authenticated using (true);
 create policy "Super admins can manage spa settings"
@@ -102,6 +109,8 @@ with check (exists (select 1 from admin_users where user_id = auth.uid() and rol
 
 drop policy if exists "Anyone can read active therapists" on therapists;
 drop policy if exists "Admins can manage therapists" on therapists;
+drop policy if exists "Public and staff can read therapists" on therapists;
+drop policy if exists "Super admins can manage therapists" on therapists;
 create policy "Public and staff can read therapists"
 on therapists for select to anon, authenticated
 using (
@@ -115,6 +124,7 @@ with check (exists (select 1 from admin_users where user_id = auth.uid() and rol
 
 drop policy if exists "Anyone can read therapist-service mapping" on therapist_services;
 drop policy if exists "Admins can manage therapist-service mapping" on therapist_services;
+drop policy if exists "Super admins can manage therapist-service mapping" on therapist_services;
 create policy "Anyone can read therapist-service mapping"
 on therapist_services for select to anon, authenticated using (true);
 create policy "Super admins can manage therapist-service mapping"
@@ -123,6 +133,8 @@ using (exists (select 1 from admin_users where user_id = auth.uid() and role = '
 with check (exists (select 1 from admin_users where user_id = auth.uid() and role = 'super_admin'));
 
 drop policy if exists "Admins can manage therapist time off" on therapist_time_off;
+drop policy if exists "Staff can read therapist time off" on therapist_time_off;
+drop policy if exists "Super admins can manage therapist time off" on therapist_time_off;
 create policy "Staff can read therapist time off"
 on therapist_time_off for select to authenticated
 using (exists (select 1 from admin_users where user_id = auth.uid()));
@@ -134,6 +146,9 @@ with check (exists (select 1 from admin_users where user_id = auth.uid() and rol
 drop policy if exists "Anyone can create a support ticket" on support_tickets;
 drop policy if exists "Admins can read support tickets" on support_tickets;
 drop policy if exists "Admins can update support tickets" on support_tickets;
+drop policy if exists "Staff can read support tickets" on support_tickets;
+drop policy if exists "Staff can update support tickets" on support_tickets;
+drop policy if exists "Super admins can delete support tickets" on support_tickets;
 create policy "Staff can read support tickets"
 on support_tickets for select to authenticated
 using (exists (select 1 from admin_users where user_id = auth.uid()));
